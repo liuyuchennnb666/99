@@ -1,0 +1,230 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>使用 ChatGPT-4o-ca</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background-color: #f4f4f4;
+    }
+    #ocr-results {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      background: #fff;
+      padding: 10px;
+      border-bottom: 2px solid #ddd;
+      overflow-y: auto;
+      max-height: 40%;
+    }
+    #ocr-results .ocr-text {
+      font-size: 16px;
+      color: #333;
+      margin-bottom: 10px;
+    }
+    #ai-response {
+      font-size: 16px;
+      color: #007aff;
+      margin-top: 10px;
+    }
+    #toggle-button {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      width: 80px;
+      height: 80px;
+      border-radius: 50%;
+      background: #007aff; /* 蓝色表示开启状态 */
+      color: white;
+      font-size: 14px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+      cursor: pointer;
+    }
+    #toggle-button.red {
+      background: #ff3b30; /* 红色表示关闭状态 */
+    }
+    #camera-preview {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      width: 80px;
+      height: 80px;
+      border-radius: 50%;
+      overflow: hidden;
+      display: none;
+      z-index: 9999;
+    }
+    video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    #stop-camera {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: red;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      padding: 10px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <div id="ocr-results">
+    <div id="ocr-text" class="ocr-text">OCR 实时文字将显示在这里...</div>
+    <div id="ai-response">AI 回答内容将显示在这里...</div>
+  </div>
+  <div id="camera-preview">
+    <video id="camera" autoplay playsinline muted></video>
+  </div>
+  <div id="toggle-button">实时画面</div>
+  <button id="stop-camera">停止摄像头</button>
+
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js"></script>
+  <script>
+    const camera = document.getElementById("camera");
+    const toggleButton = document.getElementById("toggle-button");
+    const stopCameraButton = document.getElementById("stop-camera");
+    const ocrResults = document.getElementById("ocr-text");
+    const aiResponse = document.getElementById("ai-response");
+    const cameraPreview = document.getElementById("camera-preview");
+
+    let cameraActive = false;
+    let ocrInterval;
+    let accumulatedText = '';
+    let capturedFrames = []; // 未裁剪的帧数据
+
+    // ChatAnywhere API 配置
+    const API_BASE_URL = "https://api.chatanywhere.tech/v1/chat/completions";
+    const API_KEY = "sk-IuArZBKBkh1QgylKkPbuVdTmlAS9ynYRA8MyrbK6Rqi2tACZ"; // 替换为你的 API 密钥
+
+    // 初始化摄像头
+    async function startCamera() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+        camera.srcObject = stream;
+        cameraPreview.style.display = "block";
+        cameraActive = true;
+        startOCR(); // 开启OCR识别
+      } catch (error) {
+        alert("无法启动摄像头，请检查权限设置！");
+        console.error(error);
+      }
+    }
+
+    // 停止摄像头
+    function stopCamera() {
+      const stream = camera.srcObject;
+      if (stream) {
+        stream.getTracks().forEach((track) => track.stop());
+      }
+      camera.srcObject = null;
+      cameraPreview.style.display = "none";
+      cameraActive = false;
+      stopOCR(); // 停止OCR
+    }
+
+    // 切换摄像头状态
+    toggleButton.addEventListener("click", () => {
+      if (cameraActive) {
+        stopCamera();
+        toggleButton.classList.add("red");
+        toggleButton.textContent = "已关闭";
+      } else {
+        startCamera();
+        toggleButton.classList.remove("red");
+        toggleButton.textContent = "实时画面";
+      }
+    });
+
+    // 停止摄像头按钮
+    stopCameraButton.addEventListener("click", () => {
+      stopCamera();
+      processAccumulatedText(); // 处理OCR文字和图像
+    });
+
+    // 启动 OCR 识别
+    function startOCR() {
+      ocrInterval = setInterval(async () => {
+        const canvas = document.createElement("canvas");
+        const context = canvas.getContext("2d");
+        canvas.width = camera.videoWidth;
+        canvas.height = camera.videoHeight;
+        context.drawImage(camera, 0, 0, canvas.width, canvas.height);
+
+        const imageData = canvas.toDataURL("image/png");
+        capturedFrames.push(imageData); // 保存未裁剪的画面
+
+        try {
+          const result = await Tesseract.recognize(imageData, "chi_sim");
+          const text = result.data.text.trim();
+          if (text) {
+            accumulatedText += text + "\n";
+            ocrResults.textContent = accumulatedText; // 更新显示
+          }
+        } catch (error) {
+          console.error("OCR 失败：", error);
+        }
+      }, 1000 / 30); // 每秒30帧
+    }
+
+    // 停止 OCR
+    function stopOCR() {
+      clearInterval(ocrInterval);
+    }
+
+    // 处理 OCR 文字和图像
+    async function processAccumulatedText() {
+      if (!accumulatedText.trim()) return;
+
+      aiResponse.textContent = "AI 正在处理，请稍候...";
+      const AIResponse = await sendToGPT(accumulatedText.trim(), capturedFrames);
+      aiResponse.textContent = `AI 整理结果：\n${AIResponse}`;
+      accumulatedText = ''; // 清空累积文字
+      capturedFrames = []; // 清空未裁剪图像
+    }
+
+    // 调用 ChatAnywhere GPT-4o-ca API
+    async function sendToGPT(text, frames) {
+      try {
+        const response = await fetch(API_BASE_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${API_KEY}`
+          },
+          body: JSON.stringify({
+            model: "gpt-4o", // 使用 GPT-4o-ca 模型
+            messages: [
+              { role: "system", content: "你是一个OCR文字和图像处理助手，请严格按照以下指令执行操作：1. 整理OCR文字为清晰题目；2. 生成答案；3. 如需图片标明原因。" },
+              { role: "user", content: `OCR文字：\n${text}\n相关图像：${frames.join(", ")}` }
+            ],
+            temperature: 0.2
+          })
+        });
+
+        if (!response.ok) {
+          throw new Error(`API 请求失败：${response.status}`);
+        }
+
+        const result = await response.json();
+        return result.choices[0].message.content;
+      } catch (error) {
+        console.error("GPT-4o-ca API 调用失败：", error);
+        return "AI处理失败，请稍后重试。";
+      }
+    }
+  </script>
+</body>
+</html>
